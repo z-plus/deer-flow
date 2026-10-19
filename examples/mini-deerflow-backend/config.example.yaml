@@ -1,0 +1,10 @@
+# Stage 1 will read model configuration. Keeping this file inert in the
+# foundation stage makes installation and tests credential-free.
+model:
+  provider: fake
+  name: deterministic-test-model
+
+runtime:
+  data_dir: .mini-deerflow
+  max_turns: 20
+
