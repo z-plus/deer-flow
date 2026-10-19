@@ -19,17 +19,20 @@ Agent、HTTP API、数据库、沙箱等功能尚未实现。后续阶段会按�
 
 ## 环境与初始命令
 
-要求 Python 3.12+。在本目录运行：
+本项目是父工程 `backend` uv workspace 的成员，共用 `backend/.venv` 和
+`backend/uv.lock`，不要在本目录创建独立虚拟环境或锁文件。要求 Python 3.12+。
+
+首次初始化时，从仓库的 `backend/` 目录运行：
 
 ```bash
-uv sync --extra dev
-uv run python -m pytest -q
-uv build
+uv sync
+uv run python -c "import mini_deerflow; print(mini_deerflow.__version__)"
+uv run pytest ../examples/mini-deerflow-backend/tests -q
 ```
 
-`uv sync` 会创建独立的 `.venv` 并以可编辑方式安装当前包及模型依赖；IDE
-请选择本目录下的 `.venv` 作为 Python 解释器。`uv build` 会在 `dist/` 生成
-wheel 和源码包，安装 wheel 时会自动安装同一组运行依赖。
+`uv sync` 会在父工程的 `backend/.venv` 中以可编辑方式安装当前包及模型依赖；
+IDE 请选择 `backend/.venv` 作为 Python 解释器。由于是可编辑安装，修改
+`harness/mini_deerflow/` 后不需要重新安装即可在代码中导入最新实现。
 
 测试默认离线运行，不读取模型凭据。配置起点见 [`config.example.yaml`](config.example.yaml)。
 
@@ -53,36 +56,36 @@ wheel 和源码包，安装 wheel 时会自动安装同一组运行依赖。
 ## 目录边界
 
 ```text
-src/mini_deerflow/
-|-- learning_stages.py     # 十二阶段与目标包的机器可读清单
-|-- harness/               # 可复用能力；不得导入 app
-|   |-- agents/            # 1-2: Agent 与显式状态图
-|   |-- models/            # 1: 模型构造
-|   |-- tools/             # 1, 7: 内置工具
-|   |-- checkpoints/       # 3: thread checkpoint
-|   |-- runtime/           # 4-5: Run 生命周期与取消
-|   |-- streaming/         # 5: 事件流与 SSE 桥接
-|   |-- middleware/        # 6: 运行中间件
-|   |-- sandbox/           # 7: thread workspace
-|   |-- persistence/       # 8: SQLite Run/Event
-|   |-- skills/            # 9: Skills
-|   |-- mcp/               # 10: MCP
-|   |-- subagents/         # 11: Subagent
-|   `-- memory/            # 12: 长期记忆
-`-- app/                   # 应用适配层；可以调用 harness
+harness/                   # Python 包源码根目录
+`-- mini_deerflow/         # 可复用能力；导入名为 mini_deerflow
+    |-- learning_stages.py # 十二阶段与目标包的机器可读清单
+    |-- agents/            # 1-2: Agent 与显式状态图
+    |-- models/            # 1: 模型构造
+    |-- tools/             # 1, 7: 内置工具
+    |-- checkpoints/       # 3: thread checkpoint
+    |-- runtime/           # 4-5: Run 生命周期与取消
+    |-- streaming/         # 5: 事件流与 SSE 桥接
+    |-- middleware/        # 6: 运行中间件
+    |-- sandbox/           # 7: thread workspace
+    |-- persistence/       # 8: SQLite Run/Event
+    |-- skills/            # 9: Skills
+    |-- mcp/               # 10: MCP
+    |-- subagents/         # 11: Subagent
+    `-- memory/            # 12: 长期记忆
+app/                       # 应用适配层；可以导入 mini_deerflow
     |-- gateway/           # 4: FastAPI 组装与生命周期
     |-- routers/           # 4-5, 7: HTTP/SSE/上传接口
     `-- auth/              # 12: 本地认证
 ```
 
-这些包现在只声明职责，不包含未来阶段的业务实现。边界测试会扫描 `harness` 的 Python import，阻止它反向依赖 `app`。这与 DeerFlow 的 Harness/App 分层一致。
+调用方使用 `from mini_deerflow.models import create_chat_model`，不需要在导入路径中出现 `harness`。这些包现在只声明职责，不包含未来阶段的业务实现。边界测试会扫描 `mini_deerflow` 的 Python import，阻止它反向依赖 `app`。这与 DeerFlow 的 Harness/App 分层一致。
 
 ## 阶段 0 验收
 
-运行：
+从仓库的 `backend/` 目录运行：
 
 ```bash
-python -m pytest -q
+uv run pytest ../examples/mini-deerflow-backend/tests -q
 ```
 
 验收问题：

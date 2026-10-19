@@ -74,6 +74,9 @@ dev = [
     # Monocle tracer (also the deerflow-harness[monocle] extra); kept in the dev
     # group so the tracing tests can import it without forcing it onto installs.
     "monocle_apptrace>=0.8.8",
+    # Teaching backend example; installed editable from the shared workspace so
+    # contributors can import mini_deerflow without creating another .venv.
+    "mini-deerflow-backend",
     # redis is an optional runtime extra (deerflow-harness[redis]); pin it in the
     # dev group so the stream-bridge tests can always import/exercise the redis
     # bridge without forcing it onto production installs.
@@ -112,8 +115,9 @@ default-groups = ["dev", "extensions"]
 override-dependencies = ["websockets==16.0"]
 
 [tool.uv.workspace]
-members = ["packages/harness", "packages/extension-api"]
+members = ["packages/harness", "packages/extension-api", "../examples/mini-deerflow-backend"]
 
 [tool.uv.sources]
 deerflow-harness = { workspace = true }
 deerflow-extension-api = { workspace = true }
+mini-deerflow-backend = { workspace = true }

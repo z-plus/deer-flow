@@ -4,23 +4,23 @@ import ast
 from pathlib import Path
 
 
-HARNESS_ROOT = Path(__file__).parents[1] / "src" / "mini_deerflow" / "harness"
+HARNESS_ROOT = Path(__file__).parents[1] / "harness" / "mini_deerflow"
 
 
 def forbidden_app_imports(source: str) -> list[str]:
     violations: list[str] = []
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
-            violations.extend(alias.name for alias in node.names if alias.name == "mini_deerflow.app" or alias.name.startswith("mini_deerflow.app."))
+            violations.extend(alias.name for alias in node.names if alias.name == "app" or alias.name.startswith("app."))
         elif isinstance(node, ast.ImportFrom) and node.module:
-            if node.module == "mini_deerflow.app" or node.module.startswith("mini_deerflow.app."):
+            if node.module == "app" or node.module.startswith("app."):
                 violations.append(node.module)
     return violations
 
 
 def test_boundary_check_detects_forbidden_import() -> None:
-    assert forbidden_app_imports("from mini_deerflow.app import gateway") == ["mini_deerflow.app"]
-    assert forbidden_app_imports("import mini_deerflow.app.gateway") == ["mini_deerflow.app.gateway"]
+    assert forbidden_app_imports("from app import gateway") == ["app"]
+    assert forbidden_app_imports("import app.gateway") == ["app.gateway"]
 
 
 def test_harness_does_not_import_app() -> None:
@@ -31,4 +31,3 @@ def test_harness_does_not_import_app() -> None:
     }
 
     assert violations == {}
-

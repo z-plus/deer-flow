@@ -1,0 +1,8 @@
+# 阶段 1 会读取模型配置；阶段 0 保持配置无副作用。
+model:
+  provider: fake
+  name: deterministic-test-model
+
+runtime:
+  data_dir: .mini-deerflow-teacher
+  max_turns: 20
