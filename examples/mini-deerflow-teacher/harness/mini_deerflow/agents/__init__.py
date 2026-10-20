@@ -6,7 +6,7 @@ from .lead_agent.agent import (
     UnknownToolError,
     run_agent,
 )
-from .lead_agent.graph import RequestContext, build_agent_graph
+from .lead_agent.graph import RequestContext, build_agent_graph, make_lead_agent
 from .thread_state import ThreadState
 
 __all__ = [
@@ -16,5 +16,6 @@ __all__ = [
     "ThreadState",
     "UnknownToolError",
     "build_agent_graph",
+    "make_lead_agent",
     "run_agent",
 ]

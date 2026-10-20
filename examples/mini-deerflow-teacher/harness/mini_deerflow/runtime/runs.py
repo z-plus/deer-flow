@@ -10,12 +10,14 @@ import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
+from collections.abc import AsyncIterator
 from typing import Any, Protocol
 from uuid import uuid4
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
 from mini_deerflow.checkpoints import thread_config
+from mini_deerflow.streaming import MemoryStreamBridge
 
 
 class AgentRuntime(Protocol):
@@ -33,6 +35,15 @@ class AgentRuntime(Protocol):
         context: dict[str, str],
     ) -> dict[str, Any]: ...
 
+    def astream(
+        self,
+        input: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        context: dict[str, str],
+        stream_mode: str,
+    ) -> AsyncIterator[Any]: ...
+
 
 class RunStatus(StrEnum):
     """一次 Run 的生命周期状态。"""
@@ -41,6 +52,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class RunNotFoundError(LookupError):
@@ -73,9 +85,11 @@ class RunManager:
     保留，供客户端继续查询结果。
     """
 
-    def __init__(self, agent: AgentRuntime):
+    def __init__(self, agent: AgentRuntime, bridge: MemoryStreamBridge):
         # 依赖注入：Manager 只依赖 ainvoke 契约，不负责创建具体模型或 Agent。
         self._agent = agent
+        # StreamBridge 只传递事件，不负责 Run 状态和 Agent 执行。
+        self._bridge = bridge
         # 教学阶段使用内存字典；后续持久化阶段会替换为数据库仓库。
         self._runs: dict[str, RunSnapshot] = {}
         # 保留强引用，避免后台任务在完成前丢失，也方便应用关闭时统一取消。
@@ -129,6 +143,23 @@ class RunManager:
                 raise RunNotFoundError(f"Run 不存在: {run_id}")
             return replace(snapshot)
 
+    async def stream(self, run_id: str) -> AsyncIterator[Any]:
+        """订阅指定 Run 的事件；不存在的 Run 必须先报错。"""
+
+        await self.get_run(run_id)
+        async for event in self._bridge.subscribe(run_id):
+            yield event
+
+    async def cancel_run(self, run_id: str) -> RunSnapshot:
+        """取消仍在执行的 Run，并返回取消后的快照。"""
+
+        await self.get_run(run_id)
+        task = self._tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return await self.get_run(run_id)
+
     async def aclose(self) -> None:
         """取消仍在执行的后台任务，用于应用关闭。"""
 
@@ -143,27 +174,45 @@ class RunManager:
 
         # 后台任务真正获得执行机会后，Run 才从 queued 进入 running。
         await self._update(run_id, status=RunStatus.RUNNING)
+        await self._bridge.publish(run_id, "status", {"status": "running"})
         snapshot = await self.get_run(run_id)
         try:
             # thread_id 同时进入 checkpoint 配置和业务 Context：前者用于恢复
             # 对话状态，后者供 Agent/中间件读取本次请求所属的用户与 thread。
-            result = await self._agent.ainvoke(
+            output_parts: list[str] = []
+            stream = self._agent.astream(
                 {"messages": [HumanMessage(content=message)]},
                 config=thread_config(snapshot.thread_id),
                 context={
                     "thread_id": snapshot.thread_id,
                     "user_id": snapshot.user_id,
                 },
+                stream_mode="messages",
             )
-            # create_agent() 返回完整 State；HTTP 层只需要最后一条回答文本。
-            output = self._extract_output(result)
+            # messages 模式返回 (消息块, 元数据)。这里只向客户端转发文本块。
+            async for message_chunk, _metadata in stream:
+                # 工具返回值也可能出现在 messages 流中；HTTP 输出只属于 AI 回复。
+                if not isinstance(message_chunk, (AIMessage, AIMessageChunk)):
+                    continue
+                content = message_chunk.content
+                if isinstance(content, str) and content:
+                    output_parts.append(content)
+                    await self._bridge.publish(run_id, "message", {"content": content})
+
+            output = "".join(output_parts)
             await self._update(
                 run_id,
                 status=RunStatus.COMPLETED,
                 output=output,
             )
+            await self._bridge.publish(
+                run_id,
+                "status",
+                {"status": "completed", "output": output},
+            )
         except asyncio.CancelledError:
-            # 取消不是普通失败。保留该异常，让上层关闭或后续取消逻辑处理。
+            await self._update(run_id, status=RunStatus.CANCELLED)
+            await self._bridge.publish(run_id, "status", {"status": "cancelled"})
             raise
         except Exception as exc:
             # 教学版本把异常转换成可查询的 failed 状态，避免后台任务静默失败。
@@ -172,6 +221,14 @@ class RunManager:
                 status=RunStatus.FAILED,
                 error=str(exc) or type(exc).__name__,
             )
+            await self._bridge.publish(
+                run_id,
+                "status",
+                {"status": "failed", "error": str(exc) or type(exc).__name__},
+            )
+        finally:
+            # 无论成功、失败还是取消，消费者最终都能退出，而不会永久挂起。
+            await self._bridge.finish(run_id)
 
     async def _update(
         self,

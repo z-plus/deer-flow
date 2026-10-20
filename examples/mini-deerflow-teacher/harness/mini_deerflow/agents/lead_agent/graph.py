@@ -18,13 +18,13 @@ class RequestContext(TypedDict):
     user_id: str
 
 
-def build_agent_graph(
+def make_lead_agent(
     *,
     model: BaseChatModel,
     tools: Sequence[BaseTool],
     checkpointer: BaseCheckpointSaver | None = None,
 ):
-    """使用 LangChain ``create_agent`` 创建 Agent 图。"""
+    """使用 LangChain ``create_agent`` 创建主 Agent。"""
 
     return create_agent(
         model=model,
@@ -32,5 +32,20 @@ def build_agent_graph(
         system_prompt=SYSTEM_PROMPT,
         state_schema=ThreadState,
         context_schema=RequestContext,
+        checkpointer=checkpointer,
+    )
+
+
+def build_agent_graph(
+    *,
+    model: BaseChatModel,
+    tools: Sequence[BaseTool],
+    checkpointer: BaseCheckpointSaver | None = None,
+):
+    """兼容早期教学代码；新代码应使用 ``make_lead_agent``。"""
+
+    return make_lead_agent(
+        model=model,
+        tools=tools,
         checkpointer=checkpointer,
     )

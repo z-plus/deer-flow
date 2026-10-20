@@ -10,7 +10,7 @@ from mini_deerflow.models.provider_custom import ProviderCustom
 from mini_deerflow.models.provider_deepseek import ProviderDeepSeek
 
 
-def create_chat_model(name: str | None = None, provider: str = "openai", *, app_config: dict | None = None, **kwargs) -> BaseChatModel:
+def create_chat_model(model: str | None = None, provider: str = "openai", *, app_config: dict | None = None, **kwargs) -> BaseChatModel:
     """Create a chat model from the config file.
     Args:
     """
@@ -19,7 +19,7 @@ def create_chat_model(name: str | None = None, provider: str = "openai", *, app_
     #     model_provider = ChatOpenAI(model=name,)
 
     if provider == "deepseek":
-        model_provider = ProviderDeepSeek.model_factory(model=name)
+        model_provider = ProviderDeepSeek.model_factory(model=model)
     if model_provider is None:
-        model_provider = ProviderCustom.model_factory(model=name)
+        model_provider = ProviderCustom.model_factory(model=model)
     return model_provider

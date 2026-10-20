@@ -26,7 +26,7 @@
 
 使用 `Protocol` 声明 RunManager 只需要 Agent 提供 `ainvoke()`。这样运行管理层不依赖某个具体模型，也不需要知道 Agent 内部如何创建。
 
-学习重点：面向最小接口编程，以及如何用假 Agent 替换真实 Agent。
+学习重点：面向最小接口编程，使 RunManager 不依赖 Agent 的内部实现。
 
 ### 第三步：实现 RunManager
 
@@ -48,13 +48,15 @@ RunManager 调用 Agent 的公开 `ainvoke()`，传入消息、checkpoint 的 `t
 
 ### 第六步：组装应用与关闭清理
 
-`create_app()` 注入 RunManager、注册路由，并在 FastAPI lifespan 结束时调用 `manager.aclose()`。
+`create_app()` 创建 FastAPI；应用启动进入 lifespan 后，依次创建模型、checkpointer、lead agent 和 RunManager，并把共享对象保存到 `app.state`。关闭阶段调用 `manager.aclose()`。
 
-学习重点：后台任务也属于应用资源，服务关闭时必须清理。
+学习重点：运行时对象应在 lifespan 中初始化；后台任务也属于应用资源，服务关闭时必须清理。
 
-### 第七步：验证三条核心路径
+### 第七步：沿请求读取共享服务
 
-分别验证成功 Run、失败 Run 和未知 Run。测试使用假 Agent，不依赖真实模型和外部网络。
+路由是模块级 `router`，处理请求时通过 `get_run_manager(request)` 从 `request.app.state` 获取 lifespan 创建的共享 Manager。
+
+学习重点：路由不创建 Manager，也不通过路由工厂闭包持有 Manager；服务的来源和生命周期都由 Gateway 统一管理。
 
 完成这七步后，数据流应当十分明确：
 
@@ -82,6 +84,20 @@ POST /api/threads/{thread_id}/runs
 
 GET /api/runs/{run_id} ──→ 查询最新状态
 ```
+
+真正的应用依赖链由 Gateway lifespan 闭环：
+
+```text
+create_chat_model()
+        ↓
+make_lead_agent()       ← 前三个阶段完成的 Agent
+        ↓
+RunManager(agent)       ← 第四阶段运行生命周期
+        ↓
+app.state.run_manager   ← 路由按 Request 获取
+```
+
+`create_app()` 负责创建 FastAPI 和挂载模块级 router；lifespan 负责初始化运行时服务。这个结构与 DeerFlow Gateway 的启动方式一致。
 
 ## 3. Run 与 thread
 
@@ -171,6 +187,21 @@ harness/mini_deerflow/runtime/runs.py
 
 Harness 不得导入 App 或 FastAPI。App 可以导入 Harness 并把它组装成 HTTP 服务。
 
+### 为什么服务保存在 app.state？
+
+模型、Agent、checkpointer 和 RunManager 都需要跨请求共享，也必须在应用关闭时统一清理。FastAPI 的 `app.state` 用来保存这些应用级运行时对象：
+
+```text
+lifespan 启动
+    └── app.state.run_manager = RunManager(agent)
+                    ↓
+HTTP Request → get_run_manager(request)
+                    ↓
+              共享 RunManager
+```
+
+如果每个路由或每次请求重新创建 Manager，POST 创建的 Run 就无法被后续 GET 查询到，thread checkpoint 也无法连续使用。
+
 ## 9. 为什么使用 Agent.ainvoke？
 
 RunManager 面向 `create_agent()` 返回对象的公开异步接口 `ainvoke()`，不读取或修改 LangGraph 内部节点。后续阶段也继续通过 LangChain Agent 的公开能力扩展。
@@ -187,13 +218,18 @@ RunManager 面向 `create_agent()` 返回对象的公开异步接口 `ainvoke()`
 
 这些能力会在后续阶段逐步加入。
 
-## 11. 运行测试
+## 11. 启动 Web 程序
 
 ```powershell
-backend\.venv\Scripts\python.exe -m pytest examples\mini-deerflow-teacher\tests\test_async_runs_api.py -v
+$env:OPENAI_API_KEY="你的 API Key"
+$env:MINI_DEERFLOW_MODEL_PROVIDER="openai"
+$env:MINI_DEERFLOW_MODEL_NAME="gpt-4.1-mini"
+
+backend\.venv\Scripts\uvicorn.exe app.gateway.app:app `
+  --app-dir examples\mini-deerflow-teacher
 ```
 
-测试覆盖成功、失败和 404 三条路径，不调用真实模型。
+启动过程会进入 lifespan，创建 lead agent 和 RunManager。服务关闭时会取消尚未结束的后台 Run。
 
 ## 12. 阶段考试
 
