@@ -143,11 +143,19 @@ class RunManager:
                 raise RunNotFoundError(f"Run 不存在: {run_id}")
             return replace(snapshot)
 
-    async def stream(self, run_id: str) -> AsyncIterator[Any]:
+    async def stream(
+        self,
+        run_id: str,
+        *,
+        last_event_id: str | None = None,
+    ) -> AsyncIterator[Any]:
         """订阅指定 Run 的事件；不存在的 Run 必须先报错。"""
 
         await self.get_run(run_id)
-        async for event in self._bridge.subscribe(run_id):
+        async for event in self._bridge.subscribe(
+            run_id,
+            last_event_id=last_event_id,
+        ):
             yield event
 
     async def cancel_run(self, run_id: str) -> RunSnapshot:
@@ -228,7 +236,7 @@ class RunManager:
             )
         finally:
             # 无论成功、失败还是取消，消费者最终都能退出，而不会永久挂起。
-            await self._bridge.finish(run_id)
+            await self._bridge.publish_end(run_id)
 
     async def _update(
         self,

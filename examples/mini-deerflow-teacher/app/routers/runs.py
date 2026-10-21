@@ -4,11 +4,11 @@
 访问 RunManager 的内部字典。
 """
 
-from datetime import datetime
 import json
 from collections.abc import AsyncIterator
+from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,11 @@ from mini_deerflow.runtime import (
     RunNotFoundError,
     RunSnapshot,
     RunStatus,
+)
+from mini_deerflow.streaming import (
+    END_SENTINEL,
+    HEARTBEAT_SENTINEL,
+    StreamGap,
 )
 
 
@@ -92,7 +97,7 @@ async def get_run(run_id: str, request: Request) -> RunResponse:
     return RunResponse.from_snapshot(snapshot)
 
 
-def _encode_sse(event_id: int, event: str, data: dict) -> str:
+def _encode_sse(event_id: str, event: str, data: object) -> str:
     """把内部事件编码为浏览器可识别的 SSE 文本帧。"""
 
     payload = json.dumps(data, ensure_ascii=False)
@@ -100,7 +105,11 @@ def _encode_sse(event_id: int, event: str, data: dict) -> str:
 
 
 @router.get("/runs/{run_id}/stream", response_model=None)
-async def stream_run(run_id: str, request: Request) -> StreamingResponse:
+async def stream_run(
+    run_id: str,
+    request: Request,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
     """持续返回 Run 事件，直到 Agent 进入终态。"""
 
     manager = get_run_manager(request)
@@ -110,8 +119,28 @@ async def stream_run(run_id: str, request: Request) -> StreamingResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def event_source() -> AsyncIterator[str]:
-        async for item in manager.stream(run_id):
-            yield _encode_sse(item.event_id, item.event, item.data)
+        async for item in manager.stream(run_id, last_event_id=last_event_id):
+            if item is HEARTBEAT_SENTINEL:
+                # SSE 注释不会触发业务事件，但能防止空闲连接被代理关闭。
+                yield ": heartbeat\n\n"
+            elif item is END_SENTINEL:
+                yield _encode_sse("", "end", {})
+            elif isinstance(item, StreamGap):
+                yield _encode_sse(
+                    "",
+                    "gap",
+                    {
+                        "requested_event_id": item.requested_event_id,
+                        "earliest_available_event_id": (
+                            item.earliest_available_event_id
+                        ),
+                        "latest_available_event_id": (
+                            item.latest_available_event_id
+                        ),
+                    },
+                )
+            else:
+                yield _encode_sse(item.id, item.event, item.data)
 
     return StreamingResponse(
         event_source(),

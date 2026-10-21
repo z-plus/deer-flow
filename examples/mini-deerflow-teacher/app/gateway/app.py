@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
     finally:
         # 5. Gateway 关闭时先清理仍在执行的 Run，避免后台任务泄漏。
         await app.state.run_manager.aclose()
+        await app.state.stream_bridge.close()
 
 
 def create_app() -> FastAPI:

@@ -31,10 +31,11 @@ FastAPI StreamingResponse
 - RunManager 只负责发布事件，不关心有没有 HTTP 客户端。
 - SSE 路由只负责订阅事件，不负责执行 Agent。
 - 历史事件允许客户端在 Run 开始后再连接。
-- 每个订阅者有独立队列，不会互相抢走事件。
+- 每个订阅者维护独立读取游标，共享同一份有界事件日志。
 
-生产版 DeerFlow 还支持 Redis、事件保留上限、断线续传和 stream gap。教学版
-先实现单进程内存版本，把边界和数据流理解清楚。
+Teacher 的内存实现已经保留 DeerFlow 的核心粒度：事件保留上限、
+`Last-Event-ID` 断线续传、`StreamGap`、心跳、结束哨兵和显式清理。生产版
+还可以换成 Redis，以支持跨进程消费和更完整的持久化恢复。
 
 ## 二、为什么使用 Agent.astream()
 
@@ -53,7 +54,7 @@ RunManager 把非空文本块发布为 `message` 事件，同时将文本累积�
 SSE 是持续存在的 HTTP 响应，每条事件由空行分隔：
 
 ```text
-id: 2
+id: 1760000000000-2
 event: message
 data: {"content": "42"}
 
@@ -63,14 +64,17 @@ data: {"content": "42"}
 
 - `status`：`running`、`completed`、`failed` 或 `cancelled`。
 - `message`：模型产生的一段文本。
-- `end`：内部结束标记，收到后 SSE 响应退出。
+- `end`：由内部结束哨兵转换而来，收到后 SSE 响应退出。
+- `gap`：客户端需要的历史已被裁剪，应重新读取 Run 的持久化状态。
+- `: heartbeat`：SSE 注释帧，用来维持空闲连接。
 
 ## 四、代码阅读顺序
 
-1. `harness/mini_deerflow/streaming/bridge.py`
-2. `harness/mini_deerflow/runtime/runs.py`
-3. `app/gateway/app.py`
-4. `app/routers/runs.py`
+1. `harness/mini_deerflow/streaming/base.py`
+2. `harness/mini_deerflow/streaming/bridge.py`
+3. `harness/mini_deerflow/runtime/runs.py`
+4. `app/gateway/app.py`
+5. `app/routers/runs.py`
 
 请按“桥接器 → 运行管理 → 生命周期注入 → HTTP 适配”的顺序阅读。
 
@@ -100,6 +104,6 @@ data: {"content": "42"}
 ## 思考题
 
 1. 为什么不能只用一个共享 `asyncio.Queue` 服务所有 SSE 客户端？
-2. 为什么 `finish()` 必须放在后台执行逻辑的 `finally` 中？
+2. 为什么 `publish_end()` 必须放在后台执行逻辑的 `finally` 中？
 3. 客户端断开 SSE，为什么不应该自动取消 Agent Run？
 4. `run_id` 和 `thread_id` 在流式执行中分别解决什么问题？

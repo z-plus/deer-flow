@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, AsyncIterator
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
@@ -171,8 +171,14 @@ class RunManager:
         content = messages[-1].content
         return content if isinstance(content, str) else str(content)
 
-    async def stream(self,
+    async def stream_create_run(self,
                          *,
                          thread_id: str,
                          user_id: str,
-                         message: str):
+                         message: str) -> AsyncIterator[Any]:
+        run_snapshot = await self.create_run(thread_id=thread_id, user_id=user_id, message=message)
+        async for event in self.stream(run_snapshot.run_id):
+            yield event
+    async def stream(self, run_id: str) -> AsyncIterator[Any]:
+        await self.get_run(run_id)
+        # TODO 流式输出 async for event in self._bridge
