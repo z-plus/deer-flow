@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import abc
+import json
 import math
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 15.0

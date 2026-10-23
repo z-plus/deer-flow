@@ -4,6 +4,16 @@
 
 ## 当前状态
 
+启动 Web 服务（在本项目目录执行，模型凭据通过环境变量配置）：
+
+```bash
+uv sync --extra dev
+uv run mini-deerflow --reload
+```
+
+默认监听 `127.0.0.1:8001`，接口文档位于 `/docs`。
+可通过 `--host` 和 `--port` 修改监听地址和端口。
+
 当前只完成了项目骨架（阶段 0）：
 
 - 独立 Python 3.12 包
@@ -37,6 +47,34 @@ IDE 请选择 `backend/.venv` 作为 Python 解释器。由于是可编辑安装
 测试默认离线运行，不读取模型凭据。配置起点见 [`config.example.yaml`](config.example.yaml)。
 
 ## 十二个学习阶段
+
+### 调用流式接口
+
+Gateway 启动后，在本项目目录运行：
+
+```bash
+uv run python scripts/request_stream.py "请计算 12 + 30"
+```
+
+脚本向 `http://127.0.0.1:8001/api/threads/demo-thread/stream` 发送 POST，
+逐行打印 SSE。可通过 `--base-url`、`--thread-id`、`--user-id` 指定服务和会话。
+Ctrl+C 断开客户端连接；这不会主动取消服务端 Run。
+
+订阅已有 Run（POST `/api/runs/{run_id}/stream`，不传请求体）：
+
+```bash
+uv run python scripts/request_stream.py --run-id YOUR_RUN_ID
+uv run python scripts/request_stream.py --run-id YOUR_RUN_ID --last-event-id 7
+```
+
+也可以使用专门的已有 Run 订阅脚本：
+
+```bash
+uv run python scripts/request_run_stream.py YOUR_RUN_ID
+uv run python scripts/request_run_stream.py YOUR_RUN_ID --last-event-id 7
+```
+
+`--last-event-id` 通过 `Last-Event-ID` 请求头传给服务端，用于断线续传。
 
 | 阶段 | 交付结果 | 主要生产代码映射 |
 | --- | --- | --- |

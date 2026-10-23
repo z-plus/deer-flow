@@ -18,9 +18,12 @@ harness/mini_deerflow/models/provider_deepseek.py
 harness/mini_deerflow/models/provider_openai.py
 harness/mini_deerflow/persistence/__init__.py
 harness/mini_deerflow/runtime/__init__.py
+harness/mini_deerflow/runtime/runs.py
 harness/mini_deerflow/sandbox/__init__.py
 harness/mini_deerflow/skills/__init__.py
 harness/mini_deerflow/streaming/__init__.py
+harness/mini_deerflow/streaming/base.py
+harness/mini_deerflow/streaming/memory.py
 harness/mini_deerflow/subagents/__init__.py
 harness/mini_deerflow/tools/__init__.py
 harness/mini_deerflow/tools/arithmetic.py
@@ -31,5 +34,5 @@ harness/mini_deerflow_backend.egg-info/requires.txt
 harness/mini_deerflow_backend.egg-info/top_level.txt
 tests/test_foundation.py
 tests/test_import_boundary.py
-tests/test_minimal_agent.py
 tests/test_project_structure.py
+tests/test_request_stream.py

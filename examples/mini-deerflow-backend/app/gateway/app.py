@@ -9,8 +9,10 @@ from app.routers import runs
 from mini_deerflow.agents import make_lead_agent
 from mini_deerflow.models import create_chat_model
 from mini_deerflow.runtime import RunManager
+from mini_deerflow.streaming import MemoryStreamBridge
 from mini_deerflow.tools import add
 from dotenv import load_dotenv
+load_dotenv(override=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,7 +26,7 @@ async def lifespan(app: FastAPI):
     app.state.checkpointer = InMemorySaver()
 
     # 2. 创建一个模型，后续不用再传递模型参数
-    app.state.model = create_chat_model(model="gpt-5.6-sol", provider="")
+    app.state.model = create_chat_model(model="gpt-6.1-sol", provider="openai")
 
     # 3. 沿用前面阶段的 lead agent，通过 LangChain create_agent() 创建，
     # 不在 Gateway 中重新实现 Agent 循环。
@@ -35,7 +37,7 @@ async def lifespan(app: FastAPI):
     )
 
     # 4. RunManager 持有同一个 lead agent，负责所有 HTTP Run 的异步执行。
-    app.state.run_manager = RunManager(app.state.agent)
+    app.state.run_manager = RunManager(app.state.agent, bridge=MemoryStreamBridge())
 
     try:
         # yield 之后 FastAPI 开始接受请求，路由此时可以访问 app.state。

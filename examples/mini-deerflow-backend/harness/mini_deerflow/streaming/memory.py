@@ -10,8 +10,6 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from prompt_toolkit import win32_types
-
 from .base import (
     DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
     END_SENTINEL,
@@ -37,7 +35,7 @@ class _RunStream:
     ended: bool = False
     # events[0] 在完整事件序列中的绝对位置。开始游标
     start_offset: int = 0
-    # cleanup 后旧订阅器仍持有此对象，retired 用于通知它停止读取。是否继续尝试读取的flag
+    # cleanup 后旧订阅器仍持有此对象，retired 用于通知它停止读取。是否继续尝试读取的flag, True 标识不用再测试了
     retired: bool = False
 
 
@@ -203,3 +201,87 @@ class MemoryStreamBridge(StreamBridge):
                 else:
                     # 将绝对偏移转换成当前 events 列表下标。例如窗口从绝对
                     # 位置 100 开始，那么 next_offset=102 对应 local_index=2。
+                    # local_index 不是历史全部event的索引位置，是当前stream.event 窗口中的偏移量
+                    local_index = next_offset - stream.start_offset
+                    if 0 <= local_index < len(stream.events):
+                        item = stream.events[local_index]
+                        next_offset += 1
+                        cursor_event_id = item.id
+                    elif stream.ended:
+                        item = END_SENTINEL
+                    else:
+
+                        try:
+                            # 当前没有可读事件，但 Run 尚未结束。wait() 会原子地
+                            # 释放 Condition 锁，让 publish()/publish_end()/cleanup()
+                            # 能修改状态；被唤醒时会重新取得锁。
+                            await asyncio.wait_for(
+                                stream.condition.wait(),
+                                timeout=heartbeat
+                            )
+                        except TimeoutError:
+                            item = HEARTBEAT_SENTINEL
+                        else:
+                            continue
+
+            yield item
+
+            # 如果item结束，或结束标识为true
+            if item is END_SENTINEL or should_stop:
+                return
+
+    def _next_id(self, run_id: str) -> str:
+        """生成“毫秒时间戳-Run 内序号”形式的单调事件 ID。"""
+        # 每个run的event是单线程发布，不存在多线程竞争一个序列号的问题，不需要加锁
+        sequence = self._counters.get(run_id, 0)
+        self._counters[run_id] = sequence + 1
+        return f"{int(time.time() * 1000)}-{sequence}"
+
+    async def publish(self, run_id: str, event: str, data: Any) -> None:
+        # event是单线程发布，不存在多线程竞争一个序列号的问题
+        stream = self._get_or_create_stream(run_id)
+        entry = StreamEvent(id=self._next_id(run_id), event=event, data=data)
+        async with stream.condition:
+            stream.events.append(entry)
+            if len(stream.events) > self._maxsize:
+                # 如果当前事件列表的长度大于最大值，则需要滑动窗口
+                overflow = len(stream.events) - self._maxsize
+                # 删除列表超出的历史数据，保留新的数据
+                del stream.events[:overflow]
+                # 移动开始游标到跳过的位置
+                stream.start_offset += overflow
+
+    async def publish_end(self, run_id: str) -> None:
+        """幂等地结束事件流并唤醒全部等待者。"""
+        stream = self._get_or_create_stream(run_id)
+        async with stream.condition:
+            stream.ended = True
+            # 唤醒所有消费者，告诉他们 stream 已经 end = True 可以退出消费
+            stream.condition.notify_all()
+
+    async def cleanup(self, run_id: str, *, delay: float = 0) -> None:
+        """回收 Run 的日志，并可靠唤醒仍持有旧流对象的订阅者。
+        等待一段时间再清理 _RunStream，主要是为了给尚未消费完、晚到或正在重连的客户端保留一个短暂的读取窗口。
+        """
+        if delay > 0:
+            await asyncio.sleep(delay)
+        stream = self._get_or_create_stream(run_id)
+        if stream is None:
+            return
+        async with stream.condition:
+            stream.ended = True
+            stream.retired = True
+            stream.events.clear()
+            # 二次校验，防止在处理clear的过程中，创建了新的流，替换旧的流，导致误删
+            if self._streams.get(run_id) is stream:
+                self._streams.pop(run_id, None)
+                self._counters.pop(run_id, None)
+            stream.condition.notify_all()
+
+
+    async def close(self) -> None:
+        """关闭所有Gateway创建的 RUN"""
+        for run_id in tuple(self._streams):
+            await self.cleanup(run_id)
+
+

@@ -3,10 +3,11 @@
 这里负责 HTTP 请求校验、状态码和响应序列化，不直接管理后台任务，也不
 访问 RunManager 的内部字典。
 """
+import json
 from datetime import datetime
 from typing import AsyncIterable
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status, Header
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
@@ -16,6 +17,7 @@ from mini_deerflow.runtime import (
     RunSnapshot,
     RunStatus,
 )
+from mini_deerflow.streaming.base import HEARTBEAT_SENTINEL, END_SENTINEL, StreamGap
 
 # 与 DeerFlow 相同：router 是模块级对象，由 Gateway 的 create_app() 统一挂载。
 router = APIRouter(prefix="/api", tags=["runs"])
@@ -84,8 +86,66 @@ async def get_run(run_id: str, request: Request) -> RunResponse:
     return RunResponse.from_snapshot(snapshot)
 
 
+def _encode_sse(event_id: str, event: str, data: object) -> str:
+    """把内部事件编码为浏览器可识别的 SSE 文本帧。"""
+
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"id: {event_id}\nevent: {event}\ndata: {payload}\n\n"
+
+@router.post("/threads/{thread_id}/stream", response_model=None)
+async def create_stream_run(
+        thread_id: str,
+        body: CreateRunRequest,
+        request: Request) -> StreamingResponse:
+    """流式输出 Run 事件，返回agent的完整推理过程"""
+
+    # 获取RunManager
+    manager = get_run_manager(request)
+    try:
+        snapshot = await manager.create_run(
+            thread_id=thread_id,
+            user_id=body.user_id,
+            message=body.message,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    async def event_source() -> AsyncIterable:
+        async for item in manager.stream(run_id=snapshot.run_id):
+            if item is HEARTBEAT_SENTINEL:
+                # SSE 注释不会触发业务事件，但能防止空闲连接被代理关闭。
+                yield ": heartbeat\n\n"
+            elif item is END_SENTINEL:
+                yield _encode_sse("", "end", {})
+            elif isinstance(item, StreamGap):
+                yield _encode_sse(
+                    "",
+                    "gap",
+                    {
+                        "requested_event_id": item.requested_event_id,
+                        "earliest_available_event_id": (
+                            item.earliest_available_event_id
+                        ),
+                        "latest_available_event_id": (
+                            item.latest_available_event_id
+                        ),
+                    },
+                )
+            else:
+                yield _encode_sse(item.id, item.event, item.data)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Content-Location": f"api/runs/{snapshot.run_id}/stream"},
+    )
+
+
+
 @router.post("/runs/{run_id}/stream", response_model=None)
-async def stream_run(thread_id: str, run_id: str, request: Request) -> StreamingResponse:
+async def stream_run(run_id: str,
+                     request: Request,
+                     last_event_id: str | None = Header(default=None, alias="Last-Event-ID")) -> StreamingResponse:
     """流式输出 Run 事件，返回agent的完整推理过程"""
 
     manager = get_run_manager(request)
@@ -96,4 +156,33 @@ async def stream_run(thread_id: str, run_id: str, request: Request) -> Streaming
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def event_source() -> AsyncIterable:
-        async for item in manager.create_run()
+        async for item in manager.stream(
+            run_id=run_id,
+        last_event_id=last_event_id,
+        ):
+            if item is HEARTBEAT_SENTINEL:
+                # SSE 注释不会触发业务事件，但能防止空闲连接被代理关闭。
+                yield ": heartbeat\n\n"
+            elif item is END_SENTINEL:
+                yield _encode_sse("", "end", {})
+            elif isinstance(item, StreamGap):
+                yield _encode_sse(
+                    "",
+                    "gap",
+                    {
+                        "requested_event_id": item.requested_event_id,
+                        "earliest_available_event_id": (
+                            item.earliest_available_event_id
+                        ),
+                        "latest_available_event_id": (
+                            item.latest_available_event_id
+                        ),
+                    },
+                )
+            else:
+                yield _encode_sse(item.id, item.event, item.data)
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )

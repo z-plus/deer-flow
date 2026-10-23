@@ -4,10 +4,15 @@ Version: 0.1.0
 Summary: A staged, from-scratch DeerFlow backend learning project
 Requires-Python: >=3.12
 Description-Content-Type: text/markdown
+Requires-Dist: fastapi
 Requires-Dist: langchain>=1.3
 Requires-Dist: langchain-core
 Requires-Dist: langchain-deepseek>=1.0.1
 Requires-Dist: langchain-openai>=1.2.1
+Requires-Dist: langgraph
+Requires-Dist: pydantic
+Requires-Dist: python-dotenv
+Requires-Dist: starlette
 Provides-Extra: dev
 Requires-Dist: pytest>=9.0.3; extra == "dev"
 
@@ -50,6 +55,34 @@ IDE 请选择 `backend/.venv` 作为 Python 解释器。由于是可编辑安装
 测试默认离线运行，不读取模型凭据。配置起点见 [`config.example.yaml`](config.example.yaml)。
 
 ## 十二个学习阶段
+
+### 调用流式接口
+
+Gateway 启动后，在本项目目录运行：
+
+```bash
+uv run python scripts/request_stream.py "请计算 12 + 30"
+```
+
+脚本向 `http://127.0.0.1:8001/api/threads/demo-thread/stream` 发送 POST，
+逐行打印 SSE。可通过 `--base-url`、`--thread-id`、`--user-id` 指定服务和会话。
+Ctrl+C 断开客户端连接；这不会主动取消服务端 Run。
+
+订阅已有 Run（POST `/api/runs/{run_id}/stream`，不传请求体）：
+
+```bash
+uv run python scripts/request_stream.py --run-id YOUR_RUN_ID
+uv run python scripts/request_stream.py --run-id YOUR_RUN_ID --last-event-id 7
+```
+
+也可以使用专门的已有 Run 订阅脚本：
+
+```bash
+uv run python scripts/request_run_stream.py YOUR_RUN_ID
+uv run python scripts/request_run_stream.py YOUR_RUN_ID --last-event-id 7
+```
+
+`--last-event-id` 通过 `Last-Event-ID` 请求头传给服务端，用于断线续传。
 
 | 阶段 | 交付结果 | 主要生产代码映射 |
 | --- | --- | --- |

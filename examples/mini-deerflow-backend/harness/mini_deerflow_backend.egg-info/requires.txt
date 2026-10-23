@@ -1,7 +1,12 @@
+fastapi
 langchain>=1.3
 langchain-core
 langchain-deepseek>=1.0.1
 langchain-openai>=1.2.1
+langgraph
+pydantic
+python-dotenv
+starlette
 
 [dev]
 pytest>=9.0.3

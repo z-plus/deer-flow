@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol, AsyncIterator
 from uuid import uuid4
 
-from langchain_core.messages import HumanMessage
-from mini_deerflow.streaming import MemoryStreamBridge
+from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk
+from mini_deerflow.streaming import StreamBridge
 
 # 定义运行时类，调用方需要提供异步方法
 class AgentRuntime(Protocol):
@@ -18,6 +20,15 @@ class AgentRuntime(Protocol):
         *,
         config: dict[str, Any],
         context: dict[str, str],) -> dict[str, Any]: ...
+
+    def astream(
+        self,
+        input: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        context: dict[str, str],
+        stream_mode: str,
+    ) -> AsyncIterator[Any]: ...
 
 class RunStatus(StrEnum):
     """一次 Run 的生命周期状态。"""
@@ -46,7 +57,7 @@ class RunSnapshot:
 class RunManager:
     """在单进程内管理异步 Agent Run。"""
 
-    def __init__(self, agent: AgentRuntime, bridge: MemoryStreamBridge):
+    def __init__(self, agent: AgentRuntime, bridge: StreamBridge):
         self._agent = agent
         # 运行快照, key 运行时id，每个运行的唯一id， value是快照
         self._runs: dict[str, RunSnapshot] = {}
@@ -112,37 +123,69 @@ class RunManager:
 
         # 开始执行任务，更新快照状态
         await self._update(run_id, status=RunStatus.RUNNING)
+        # 更新状态需要推送一个更新事件
+        await self._bridge.publish(run_id=run_id, event="status", data={"status": "running"})
         snapshot = await self.get_run(run_id)
         try:
+            # thread_id 同时进入 checkpoint 配置和业务 Context：前者用于恢复
+            # 对话状态，后者供 Agent/中间件读取本次请求所属的用户与 thread。
+            output_parts: list[str] = []
             thread_config = {"configurable": {"thread_id": snapshot.thread_id}}
             print(message)
-            result = await self._agent.ainvoke(
+            stream = self._agent.astream(
                 # create_agent() 的状态字段固定为 messages（复数）。
                 input={"messages": [HumanMessage(content=message)]},
                 config=thread_config,
                 context={
                     "thread_id": snapshot.thread_id,
                     "user_id": snapshot.user_id,
-                }
+                },
+                stream_mode="messages"
             )
-            # create_agent() 返回完整的 State， HTTP 层只需要最后一条回答的文笔
-            output = self._extract_output(result)
+            # messages 模式返回 (消息块, 元数据)。这里只向客户端转发文本块。
+            async for message_chunk, _metadata in stream:
+                # 工具返回值也可能出现在 messages 流中；HTTP 输出只属于 AI 回复。
+                if not isinstance(message_chunk, (AIMessage, AIMessageChunk)):
+                    continue
+                content = message_chunk.content
+                if isinstance(content, str) and content:
+                    output_parts.append(content)
+                    await self._bridge.publish(run_id, "message", {"content": content})
+                elif isinstance(content, list) and len(content) > 0:
+                    await self._bridge.publish(run_id, "message", {"reasoning_content": content})
+            output = "".join(output_parts)
             await self._update(
                 run_id,
                 status=RunStatus.COMPLETED,
                 output=output,
             )
+            await self._bridge.publish(
+                run_id,
+                "status",
+                {"status": "completed", "output": output},
+            )
 
         except asyncio.CancelledError:
             # 取消不是普通失败。保留该异常，让上层关闭或后续取消逻辑处理。
+            await self._update(run_id, status=RunStatus.CANCELLED)
+            await self._bridge.publish(run_id, "status", {"status": "cancelled"})
             raise
         except Exception as exc:
+            logging.error(exc)
             # 教学版本把异常转换成可查询的 failed 状态，避免后台任务静默失败。
             await self._update(
                 run_id,
                 status=RunStatus.FAILED,
                 error=str(exc) or type(exc).__name__,
             )
+            await self._bridge.publish(
+                run_id,
+                "status",
+                {"status": "failed", "error": str(exc) or type(exc).__name__},
+            )
+        finally:
+            # 无论成功、失败还是取消，消费者最终都能退出，而不会永久挂起。
+            await self._bridge.publish_end(run_id)
 
     async def _update(
         self,
@@ -171,14 +214,18 @@ class RunManager:
         content = messages[-1].content
         return content if isinstance(content, str) else str(content)
 
-    async def stream_create_run(self,
-                         *,
-                         thread_id: str,
-                         user_id: str,
-                         message: str) -> AsyncIterator[Any]:
-        run_snapshot = await self.create_run(thread_id=thread_id, user_id=user_id, message=message)
-        async for event in self.stream(run_snapshot.run_id):
-            yield event
-    async def stream(self, run_id: str) -> AsyncIterator[Any]:
+    # async def stream_create_run(self,
+    #                      *,
+    #                      thread_id: str,
+    #                      user_id: str,
+    #                      message: str) -> AsyncIterator[Any]:
+    #     run_snapshot = await self.create_run(thread_id=thread_id, user_id=user_id, message=message)
+    #     async for event in self.stream(run_snapshot.run_id, last_event_id=None):
+    #         yield event
+
+    async def stream(self, run_id: str, last_event_id: str | None = None) -> AsyncIterator[Any]:
         await self.get_run(run_id)
-        # TODO 流式输出 async for event in self._bridge
+        async for event in self._bridge.subscribe(
+                run_id,
+                last_event_id=last_event_id):
+            yield event
