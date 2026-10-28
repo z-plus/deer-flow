@@ -1,0 +1,104 @@
+Metadata-Version: 2.4
+Name: mini-deerflow-teacher
+Version: 0.1.0
+Summary: A guided, from-scratch DeerFlow backend learning project
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.115
+Requires-Dist: langchain>=1.3
+Requires-Dist: langchain-core
+Requires-Dist: langchain-deepseek>=1.0.1
+Requires-Dist: langchain-openai>=1.2.1
+Requires-Dist: langgraph<1.3,>=1.2.9
+Requires-Dist: uvicorn>=0.30
+Provides-Extra: dev
+Requires-Dist: httpx>=0.28; extra == "dev"
+Requires-Dist: pytest>=9.0.3; extra == "dev"
+
+# Mini DeerFlow Teacher
+
+这是一个从零学习 DeerFlow 后端核心思想的教学项目，以
+`examples/mini-deerflow-backend` 为参照。发行包名为 `mini-deerflow-teacher`，
+Python 导入包与目标项目一致，使用 `mini_deerflow`。
+
+## 当前进度：阶段 5（SSE、StreamBridge 与取消）
+
+- Python 3.12 `harness/mini_deerflow` 布局
+- `harness` 与 `app` 的单向依赖边界
+- 不需要 API Key 的确定性假模型
+- 十二个学习阶段的机器可读清单
+- 最小的 `模型 → 工具 → 模型` Agent 循环
+- 未知工具拒绝和最大步数保护
+- 使用 LangChain `create_agent()` 创建 Agent 图
+- `ThreadState` 继承 `AgentState` 的消息及 reducer 能力
+- 使用 `thread_id` 恢复同一会话的状态
+- 不同 thread 的消息历史彼此隔离
+- FastAPI 创建和查询 Run 的接口
+- 后台执行 Agent，HTTP 请求立即返回 `run_id`
+- `queued → running → completed/failed` 生命周期
+- Gateway lifespan 串联 model → lead agent → RunManager → FastAPI
+- 使用 Agent `astream()` 持续产生消息块
+- 使用内存 StreamBridge 解耦后台 Run 与 SSE 客户端
+- 支持 SSE 历史重放和多个独立订阅者
+- 支持取消运行中的 Run，并发布 `cancelled` 终态
+
+教学讲义与阶段考试：
+
+- [`docs/stage-01-minimal-agent.md`](docs/stage-01-minimal-agent.md)
+- [`docs/stage-02-agent-state.md`](docs/stage-02-agent-state.md)
+- [`docs/stage-03-thread-checkpoints.md`](docs/stage-03-thread-checkpoints.md)
+- [`docs/stage-04-fastapi-async-runs.md`](docs/stage-04-fastapi-async-runs.md)
+- [`docs/stage-05-sse-cancellation.md`](docs/stage-05-sse-cancellation.md)
+
+## 检查阶段 5 代码
+
+在仓库根目录执行：
+
+```powershell
+backend\.venv\Scripts\python.exe -m compileall -q `
+  examples\mini-deerflow-teacher\app `
+  examples\mini-deerflow-teacher\harness
+```
+
+如果尚未创建父工程虚拟环境，请先进入 `backend` 执行 `uv sync`。
+
+## 架构约束
+
+`harness` 是可复用运行层，不得导入应用适配层 `app`；`app` 可以调用
+`mini_deerflow`。调用方可以直接使用：
+
+```python
+from mini_deerflow.agents import run_agent
+from mini_deerflow.agents import make_lead_agent  # 内部使用 create_agent()
+from mini_deerflow.checkpoints import create_memory_checkpointer, thread_config
+from mini_deerflow.models import create_chat_model
+from mini_deerflow.tools import add
+```
+
+测试会自动扫描并保护这条边界。
+
+## 启动第五阶段应用
+
+Gateway 入口位于 `app/gateway/app.py`。FastAPI lifespan 会依次创建模型、
+lead agent、checkpointer 和 RunManager，并将它们放入 `app.state`：
+
+```powershell
+$env:OPENAI_API_KEY="你的 API Key"
+$env:MINI_DEERFLOW_MODEL_PROVIDER="openai"
+$env:MINI_DEERFLOW_MODEL_NAME="gpt-4.1-mini"
+
+backend\.venv\Scripts\uvicorn.exe app.gateway.app:app `
+  --app-dir examples\mini-deerflow-teacher
+```
+
+创建 Run 后，可以连接 SSE：
+
+```text
+GET /api/runs/{run_id}/stream
+```
+
+取消 Run：
+
+```text
+DELETE /api/runs/{run_id}
+```

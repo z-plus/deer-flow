@@ -59,7 +59,7 @@ class StreamBridge(abc.ABC):
         # 加载心跳间隔时间的默认配置
         return (
             self._heartbeat_interval
-            if value is not None
+            if value is None
             else DEFAULT_HEARTBEAT_INTERVAL_SECONDS
         )
 

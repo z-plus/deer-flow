@@ -4,20 +4,20 @@
 访问 RunManager 的内部字典。
 """
 import json
+from collections.abc import AsyncIterable
 from datetime import datetime
-from typing import AsyncIterable
 
-from fastapi import APIRouter, HTTPException, Request, status, Header
-from pydantic import BaseModel, Field
-from starlette.responses import StreamingResponse
-
-from app.gateway.deps import get_run_manager
+from fastapi import APIRouter, Header, HTTPException, Request, status
 from mini_deerflow.runtime import (
     RunNotFoundError,
     RunSnapshot,
     RunStatus,
 )
-from mini_deerflow.streaming.base import HEARTBEAT_SENTINEL, END_SENTINEL, StreamGap
+from mini_deerflow.streaming.base import END_SENTINEL, HEARTBEAT_SENTINEL, StreamGap
+from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
+
+from app.gateway.deps import get_run_manager
 
 # 与 DeerFlow 相同：router 是模块级对象，由 Gateway 的 create_app() 统一挂载。
 router = APIRouter(prefix="/api", tags=["runs"])
@@ -43,7 +43,6 @@ class RunResponse(BaseModel):
     status: RunStatus
     created_at: datetime
     updated_at: datetime
-    output: str | None = None
     error: str | None = None
 
     @classmethod

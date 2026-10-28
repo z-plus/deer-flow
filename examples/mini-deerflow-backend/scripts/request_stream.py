@@ -36,7 +36,7 @@ def request_stream(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("message", nargs="?", default="请计算 12 + 30")
+    parser.add_argument("message", nargs="?", default="100 + 132 等于多少")
     parser.add_argument("--base-url", default="http://127.0.0.1:8001")
     parser.add_argument("--thread-id", default="demo-thread")
     parser.add_argument("--user-id", default="local-user")

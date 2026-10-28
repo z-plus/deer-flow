@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Protocol, AsyncIterator
+from typing import Any, Protocol
 from uuid import uuid4
 
-from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+
+from mini_deerflow.runtime.message_stream import message_chunk_to_stream_payload
 from mini_deerflow.streaming import StreamBridge
+
 
 # 定义运行时类，调用方需要提供异步方法
 class AgentRuntime(Protocol):
@@ -37,6 +40,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 class RunNotFoundError(RuntimeError):
     """请求的 Run 不存在时抛出。"""
@@ -51,7 +55,6 @@ class RunSnapshot:
     status: RunStatus
     created_at: datetime
     updated_at: datetime
-    output: str | None = None
     error: str | None = None
 
 class RunManager:
@@ -129,7 +132,6 @@ class RunManager:
         try:
             # thread_id 同时进入 checkpoint 配置和业务 Context：前者用于恢复
             # 对话状态，后者供 Agent/中间件读取本次请求所属的用户与 thread。
-            output_parts: list[str] = []
             thread_config = {"configurable": {"thread_id": snapshot.thread_id}}
             print(message)
             stream = self._agent.astream(
@@ -142,27 +144,19 @@ class RunManager:
                 },
                 stream_mode="messages"
             )
-            # messages 模式返回 (消息块, 元数据)。这里只向客户端转发文本块。
+            # messages 模式返回 (消息块, 元数据)。
             async for message_chunk, _metadata in stream:
                 # 工具返回值也可能出现在 messages 流中；HTTP 输出只属于 AI 回复。
                 if not isinstance(message_chunk, (AIMessage, AIMessageChunk)):
                     continue
-                content = message_chunk.content
-                if isinstance(content, str) and content:
-                    output_parts.append(content)
-                    await self._bridge.publish(run_id, "message", {"content": content})
-                elif isinstance(content, list) and len(content) > 0:
-                    await self._bridge.publish(run_id, "message", {"reasoning_content": content})
-            output = "".join(output_parts)
-            await self._update(
-                run_id,
-                status=RunStatus.COMPLETED,
-                output=output,
-            )
+                payload = message_chunk_to_stream_payload(message_chunk)
+                if payload:
+                    await self._bridge.publish(run_id, "message", payload)
+            await self._update(run_id, status=RunStatus.COMPLETED)
             await self._bridge.publish(
                 run_id,
                 "status",
-                {"status": "completed", "output": output},
+                {"status": "completed"},
             )
 
         except asyncio.CancelledError:
@@ -192,7 +186,6 @@ class RunManager:
         run_id: str,
         *,
         status: RunStatus,
-        output: str | None = None,
         error: str | None = None,
     ) -> None:
         """在锁内原子更新 Run 的状态与结果。"""
@@ -201,18 +194,7 @@ class RunManager:
             snapshot = self._runs[run_id]
             snapshot.status = status
             snapshot.updated_at = datetime.now(UTC)
-            snapshot.output = output
             snapshot.error = error
-
-    @staticmethod
-    def _extract_output(result: dict[str, Any]) -> str:
-        """从 Agent State 的最后一条消息提取面向用户的回答。"""
-
-        messages = result.get("messages", [])
-        if not messages:
-            return ""
-        content = messages[-1].content
-        return content if isinstance(content, str) else str(content)
 
     # async def stream_create_run(self,
     #                      *,

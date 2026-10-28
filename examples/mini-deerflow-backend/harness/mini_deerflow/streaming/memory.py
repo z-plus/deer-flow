@@ -250,6 +250,7 @@ class MemoryStreamBridge(StreamBridge):
                 del stream.events[:overflow]
                 # 移动开始游标到跳过的位置
                 stream.start_offset += overflow
+            stream.condition.notify_all()
 
     async def publish_end(self, run_id: str) -> None:
         """幂等地结束事件流并唤醒全部等待者。"""
@@ -269,7 +270,6 @@ class MemoryStreamBridge(StreamBridge):
         if stream is None:
             return
         async with stream.condition:
-            stream.ended = True
             stream.retired = True
             stream.events.clear()
             # 二次校验，防止在处理clear的过程中，创建了新的流，替换旧的流，导致误删

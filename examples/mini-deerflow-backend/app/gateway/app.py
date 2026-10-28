@@ -1,5 +1,5 @@
 """Mini DeerFlow Gateway 的启动、生命周期与路由组装。"""
-
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -26,7 +26,11 @@ async def lifespan(app: FastAPI):
     app.state.checkpointer = InMemorySaver()
 
     # 2. 创建一个模型，后续不用再传递模型参数
-    app.state.model = create_chat_model(model="gpt-6.1-sol", provider="openai")
+    config = {
+        "api_key": os.getenv("API_KEY"),
+        "base_url": os.getenv("BASE_URL"),
+    }
+    app.state.model = create_chat_model(model="deepseek-v4.1-flash", provider="custom", app_config=config)
 
     # 3. 沿用前面阶段的 lead agent，通过 LangChain create_agent() 创建，
     # 不在 Gateway 中重新实现 Agent 循环。
